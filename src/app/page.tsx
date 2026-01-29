@@ -1,15 +1,126 @@
 'use client';
 
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
 
+type JobStatus = 'idle' | 'generating' | 'complete' | 'error';
+
+interface Job {
+  id: string;
+  status: JobStatus;
+  progress?: number;
+  message?: string;
+  videoUrl?: string;
+  error?: string;
+}
+
 export default function Home() {
+  const router = useRouter();
   const [script, setScript] = useState('');
   const [aspectRatio, setAspectRatio] = useState<'9:16' | '16:9' | '1:1'>('9:16');
+  const [mediaType, setMediaType] = useState('ai-video');
+  const [preset, setPreset] = useState('Default');
+  const [voice, setVoice] = useState('Narrator (Female)');
+  const [job, setJob] = useState<Job | null>(null);
+
+  const handleLogout = async () => {
+    await fetch('/api/auth', { method: 'DELETE' });
+    router.push('/login');
+    router.refresh();
+  };
+
+  const handleGenerate = async () => {
+    if (!script.trim()) {
+      alert('Please enter a script');
+      return;
+    }
+
+    setJob({ id: '', status: 'generating', message: 'Starting generation...' });
+
+    try {
+      const res = await fetch('/api/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          script,
+          aspectRatio,
+          mediaType,
+          preset,
+          voice,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (data.success) {
+        setJob({
+          id: data.jobId,
+          status: 'generating',
+          message: data.message || 'Processing...',
+        });
+
+        // Poll for status if we have a job ID
+        if (data.jobId) {
+          pollJobStatus(data.jobId);
+        }
+      } else {
+        setJob({
+          id: '',
+          status: 'error',
+          error: data.error || 'Failed to start generation',
+        });
+      }
+    } catch (error) {
+      setJob({
+        id: '',
+        status: 'error',
+        error: 'Network error. Is the pipeline server running?',
+      });
+    }
+  };
+
+  const pollJobStatus = async (jobId: string) => {
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/status/${jobId}`);
+        const data = await res.json();
+
+        if (data.status === 'complete') {
+          clearInterval(interval);
+          setJob({
+            id: jobId,
+            status: 'complete',
+            videoUrl: data.videoUrl,
+            message: 'Video ready!',
+          });
+        } else if (data.status === 'error') {
+          clearInterval(interval);
+          setJob({
+            id: jobId,
+            status: 'error',
+            error: data.error,
+          });
+        } else {
+          setJob({
+            id: jobId,
+            status: 'generating',
+            progress: data.progress,
+            message: data.message,
+          });
+        }
+      } catch {
+        // Keep polling on network errors
+      }
+    }, 3000);
+
+    // Stop polling after 10 minutes
+    setTimeout(() => clearInterval(interval), 10 * 60 * 1000);
+  };
 
   return (
     <div className="flex min-h-screen bg-zinc-950">
@@ -26,7 +137,7 @@ export default function Home() {
         
         <nav className="space-y-1 flex-1">
           {[
-            { icon: '🏠', label: 'Home' },
+            { icon: '🏠', label: 'Home', active: true },
             { icon: '📊', label: 'Stats' },
             { icon: '🎬', label: 'Videos' },
             { icon: '📤', label: 'Exports' },
@@ -36,7 +147,11 @@ export default function Home() {
           ].map((item) => (
             <button
               key={item.label}
-              className="w-full flex items-center gap-3 px-3 py-2 text-zinc-400 hover:text-white hover:bg-zinc-800 rounded-lg transition-colors"
+              className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ${
+                item.active 
+                  ? 'text-white bg-zinc-800' 
+                  : 'text-zinc-400 hover:text-white hover:bg-zinc-800'
+              }`}
             >
               <span>{item.icon}</span>
               <span>{item.label}</span>
@@ -44,10 +159,17 @@ export default function Home() {
           ))}
         </nav>
         
-        <div className="pt-4 border-t border-zinc-800">
+        <div className="pt-4 border-t border-zinc-800 space-y-1">
           <button className="w-full flex items-center gap-3 px-3 py-2 text-zinc-400 hover:text-white hover:bg-zinc-800 rounded-lg">
             <span>⚙️</span>
             <span>Settings</span>
+          </button>
+          <button 
+            onClick={handleLogout}
+            className="w-full flex items-center gap-3 px-3 py-2 text-zinc-400 hover:text-red-400 hover:bg-zinc-800 rounded-lg"
+          >
+            <span>🚪</span>
+            <span>Logout</span>
           </button>
         </div>
       </aside>
@@ -191,7 +313,12 @@ export default function Home() {
                   ].map((type) => (
                     <button
                       key={type.value}
-                      className="flex-1 p-4 rounded-lg border border-zinc-700 hover:border-violet-500 transition-colors"
+                      onClick={() => setMediaType(type.value)}
+                      className={`flex-1 p-4 rounded-lg border transition-colors ${
+                        mediaType === type.value
+                          ? 'border-violet-500 bg-violet-500/10'
+                          : 'border-zinc-700 hover:border-zinc-600'
+                      }`}
                     >
                       <div className="text-sm text-white font-medium">{type.label}</div>
                       <div className="text-xs text-zinc-500 mt-1">{type.desc}</div>
@@ -208,14 +335,19 @@ export default function Home() {
               </CardHeader>
               <CardContent>
                 <div className="flex gap-2 flex-wrap">
-                  {['Default', 'Ghibli Studio', 'Cinematic', 'Anime', 'Pixar', 'Documentary'].map((preset) => (
+                  {['Default', 'Ghibli Studio', 'Cinematic', 'Anime', 'Pixar', 'Documentary'].map((p) => (
                     <Button
-                      key={preset}
+                      key={p}
                       variant="outline"
                       size="sm"
-                      className="border-zinc-700 text-zinc-300 hover:border-violet-500"
+                      onClick={() => setPreset(p)}
+                      className={`border-zinc-700 ${
+                        preset === p 
+                          ? 'border-violet-500 bg-violet-500/10 text-white' 
+                          : 'text-zinc-300 hover:border-violet-500'
+                      }`}
                     >
-                      {preset}
+                      {p}
                     </Button>
                   ))}
                 </div>
@@ -229,14 +361,19 @@ export default function Home() {
               </CardHeader>
               <CardContent>
                 <div className="flex gap-2 flex-wrap">
-                  {['Narrator (Male)', 'Narrator (Female)', 'Dramatic', 'Calm', 'Energetic'].map((voice) => (
+                  {['Narrator (Male)', 'Narrator (Female)', 'Dramatic', 'Calm', 'Energetic'].map((v) => (
                     <Button
-                      key={voice}
+                      key={v}
                       variant="outline"
                       size="sm"
-                      className="border-zinc-700 text-zinc-300 hover:border-violet-500"
+                      onClick={() => setVoice(v)}
+                      className={`border-zinc-700 ${
+                        voice === v 
+                          ? 'border-violet-500 bg-violet-500/10 text-white' 
+                          : 'text-zinc-300 hover:border-violet-500'
+                      }`}
                     >
-                      {voice}
+                      {v}
                     </Button>
                   ))}
                 </div>
@@ -246,8 +383,20 @@ export default function Home() {
 
           {/* Generate Button */}
           <div className="mt-8 flex justify-center">
-            <Button size="lg" className="bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:from-violet-700 hover:to-fuchsia-700 px-12">
-              🎬 Generate Video
+            <Button 
+              size="lg" 
+              className="bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:from-violet-700 hover:to-fuchsia-700 px-12"
+              onClick={handleGenerate}
+              disabled={job?.status === 'generating'}
+            >
+              {job?.status === 'generating' ? (
+                <>
+                  <span className="animate-spin mr-2">⏳</span>
+                  Generating...
+                </>
+              ) : (
+                <>🎬 Generate Video</>
+              )}
             </Button>
           </div>
         </div>
@@ -256,16 +405,53 @@ export default function Home() {
       {/* Preview Panel */}
       <aside className="w-80 border-l border-zinc-800 p-4">
         <h2 className="text-lg font-semibold text-white mb-4">Output Preview</h2>
-        <div className="aspect-[9/16] bg-zinc-900 rounded-lg border border-zinc-800 flex items-center justify-center">
-          <div className="text-center text-zinc-500">
-            <div className="text-4xl mb-2">🎥</div>
-            <div className="text-sm">Preview will appear here</div>
-          </div>
+        
+        <div className="aspect-[9/16] bg-zinc-900 rounded-lg border border-zinc-800 flex items-center justify-center overflow-hidden">
+          {job?.status === 'complete' && job.videoUrl ? (
+            <video 
+              src={job.videoUrl} 
+              controls 
+              className="w-full h-full object-cover"
+            />
+          ) : job?.status === 'generating' ? (
+            <div className="text-center text-zinc-400 p-4">
+              <div className="text-4xl mb-4 animate-pulse">🎬</div>
+              <div className="text-sm mb-2">{job.message || 'Generating...'}</div>
+              {job.progress !== undefined && (
+                <div className="w-full bg-zinc-800 rounded-full h-2 mt-4">
+                  <div 
+                    className="bg-violet-500 h-2 rounded-full transition-all"
+                    style={{ width: `${job.progress}%` }}
+                  />
+                </div>
+              )}
+            </div>
+          ) : job?.status === 'error' ? (
+            <div className="text-center text-red-400 p-4">
+              <div className="text-4xl mb-2">❌</div>
+              <div className="text-sm">{job.error}</div>
+            </div>
+          ) : (
+            <div className="text-center text-zinc-500">
+              <div className="text-4xl mb-2">🎥</div>
+              <div className="text-sm">Preview will appear here</div>
+            </div>
+          )}
         </div>
+
         <div className="mt-4 p-3 bg-zinc-900 rounded-lg border border-zinc-800">
           <div className="text-sm text-zinc-400">Estimated cost</div>
           <div className="text-lg font-bold text-white">10 credits</div>
         </div>
+
+        {job?.status === 'complete' && job.videoUrl && (
+          <Button 
+            className="w-full mt-4 bg-emerald-600 hover:bg-emerald-700"
+            onClick={() => window.open(job.videoUrl, '_blank')}
+          >
+            ⬇️ Download Video
+          </Button>
+        )}
       </aside>
     </div>
   );
