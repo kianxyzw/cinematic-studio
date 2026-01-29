@@ -1,14 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 
-const AUTH_PASSWORD = process.env.AUTH_PASSWORD || 'demo123';
+const AUTH_PASSWORD = (process.env.AUTH_PASSWORD || 'demo123').trim();
 const COOKIE_NAME = 'cinematic_auth';
 
 export async function POST(request: NextRequest) {
   try {
     const { password } = await request.json();
 
-    if (password === AUTH_PASSWORD) {
+    if (password.trim() === AUTH_PASSWORD) {
       // Create a simple token (in production, use proper JWT)
       const token = Buffer.from(`authenticated:${Date.now()}`).toString('base64');
       
